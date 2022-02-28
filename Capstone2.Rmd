@@ -1,0 +1,624 @@
+---
+title: "Google Capstone (Cyclistic using R)"
+author: "Olexiy Pukhov"
+date: "3/1/2022"
+output:
+  word_document: default
+  html_document: default
+---
+# Introduction to the Case Study
+
+In this case study, I am working for a fictional company, Cyclistic, and I am asked to answer key business questions. I am asked to follow the steps of the 
+data analysis process - ask, prepare, process, analyze, share and act. 
+
+Specifically, I am working in a Marketing analyst team at Cyclistic, a bike-sharing company in Chicago. The director of the marketing believes the company's future success depends on maximizing the number of annual memberships.
+My team is interested in the different trends of how casual riders and annual riders use Cyclistic Bikes differently. They want to design a new marketing strategy to convert casual riders into annual members. 
+
+I am asked to write a report with the following:
+
+1. A clear statement of the business task
+2. A description of all data sources used
+3. Documentation of any cleaning or manipulation of data
+4. A summary of your analysis
+5. Supporting visualizations and key findings
+6. Your top three recommendations based on your analysis
+
+## Step 1 - Ask 
+
+The goal of this analysis is:
+
+-- 1. Clear statement of business task: How can digital media be targeted towards casual members to incline them to get a annual membership?
+
+Some questions to consider as well are:
+\n
+|. How do annual members and casual riders use cyclistic bikes differently?
+\n
+||. Why would casual riders buy Cyclistic annual memberships?
+\n
+|||. How can Cyclistic use digital media to influence casual riders to become members
+
+### Key Stakeholders
+
+#### Primary Stakeholders
+
+Marketing Manager - Lily Moreno; a person who wants to set marketing strategies aimed at converting casual riders to annual riders. Needs data to support that decision.
+
+Executive Team - Detail-oriented executive team that will approve my recommended marketing program.
+
+#### Seconday Stakeholders
+
+Analytics Team - A team of data analysts who are responsible for collecting, analyzing, and reporting data that helps drive Cyclistic's marketing strategy.
+
+## Step 2 - Prepare Data
+
+(2. A description of all the data sources used)
+
+Cyclistic's historical trip data is located here:
+https://divvy-tripdata.s3.amazonaws.com/index.html
+In order to answer the business question, 12 months of data from 2021 will be downloaded. This corresponds to 12 files - 202101-divvy-tripdata.csv to 202112-divvy-tripdata. Although there are more recent files than 2021/12, these
+12 files were chosen in order to have the most recent snapshot of the entire year.
+
+## Step 3 - Process Data
+
+3. Documentation of any cleaning or manipulation of data
+
+Using the programming language R, I will process, filter, and analyze the data. R is a powerful tool for data analysis because it is flexible,
+reproducible, and optimized for cleaning and visualizing large data. 
+
+```{r}
+knitr::opts_chunk$set(dpi = 300) 
+```
+
+```{r}
+# install packages and load libraries
+if(!require(tidyverse)) install.packages("tidyverse")
+if(!require(rio)) install.packages("rio")
+if(!require(skimr))install.packages("skimr")
+if(!require(rmarkdown))install.packages("rmarkdown")
+if(!require(doParallel))install.packages("doParallel")
+if(!require(lubridate))install.packages("lubridate")
+if(!require(patchwork))install.packages("patchwork")
+library(doParallel)
+library(skimr)
+library(lubridate)
+library(rmarkdown)
+library(tidyverse)
+library(rio)
+library(patchwork)
+#rio is a newer version of read_csv, and allows you 
+#to import all sorts of file extensions. It also 
+#correctly imports the date, instead of characters 
+#as read_csv.
+
+# do parallel computing in order to make model and 
+# plot calculation faster.
+c1 <- makePSOCKcluster(5)
+registerDoParallel(c1)
+options(scipen=999)
+
+```
+
+We will start with importing the data. 
+
+``` {r} 
+##What I wrote below needs to feed into something,
+#so I imported the first entry.
+data <- import("202101-divvy-tripdata.csv")
+
+for (i in 2:12) {
+  if (i >= 10) {
+    path = paste("2021", as.character(i), "-divvy-tripdata.csv", sep="")
+    newdata <- import(path) }
+  else {
+    path = paste("20210", as.character(i), "-divvy-tripdata.csv", sep="")
+    newdata <- import(path) }
+  data = rbind(data,newdata)}
+
+```
+
+Now, let us look through the data.
+``` {r}
+head(data)
+str(data)
+glimpse(data)
+summary(data)
+skim(data)
+
+```
+\n
+This is big data, with 559k observations over 13 columns.  Now let us process the data. 
+There might be some NAs, so lets remove the columns with those and remove duplicate entries. Let us remove rows with blank information, new columns with data on month, day, hour and route and remove the information from the imported data that we don't need to make our processing faster.
+
+```{r}
+data = na.omit(data)
+data = distinct(data)
+
+data = data %>%
+  filter(start_station_id != "" & end_station_name != "" &
+           start_station_name != "" & end_station_id != "" ) %>%
+  mutate(duration = round(difftime(ended_at, started_at, units = "mins"))) %>%
+  mutate(month = month(started_at, label = TRUE)) %>%
+  mutate(wday = wday(started_at, label = TRUE)) %>% 
+  mutate(hour = hour(started_at)) %>% 
+  mutate(route = paste(start_station_name, end_station_name, sep = " to ")) %>% 
+  select(-c(start_station_name, end_station_name, ride_id,
+            start_station_id, end_station_id, start_lat,
+            start_lng, end_lat, end_lng))
+```
+\n
+Some of the information in the data are strings, and can't be grouped together to be used further in the analysis. Let us make everything into factors so this is possible, remove entries with a negative trip duration, and sort everything in descending order by duration.
+
+``` {r}
+data <- as.data.frame(unclass(data), stringsAsFactors = TRUE)
+data = data %>% 
+  filter(duration > 0) %>%
+  arrange(-duration)
+
+```
+\n
+Let us group everything by month, member_casual (if they are members or casual riders), rideablee_type (there are 3 types of bikes - classic, docked and electric bikes) and look at some stats for the groups.
+```{r}
+data %>%
+  group_by(member_casual, wday) %>%
+  summarize(mean = round(mean(duration)), med = median(duration),
+            count = n())
+
+```
+\n
+Casual members seem to ride about ~2x more than members, with the most on weekends. Members seem to ride ~15min, while casuals ride around ~30min. 
+
+## Step 4 & 5 - Analyze and Visualize Data
+
+These two steps will be done at the same time.
+
+Let us start making some visuals for the data. 
+
+```{r}
+#Percentage of casual and member rides over the last year. Members
+#have ridden more times than casuals. Lets break this down further.
+#1. Members (55%) has ridden more rides than casuals (45%).
+
+data %>% 
+  group_by(member_casual)%>%
+  summarize(count = n()) %>%
+  mutate(percent = round(count*100/sum(count),0))  %>% 
+  ggplot(aes(x = "", y = count, fill = member_casual)) + 
+  geom_bar(width = 1, stat = "identity", color = "white", show.legend = FALSE) +
+  coord_polar("y", start = 0) + 
+  geom_text(aes(label = 
+                  paste(member_casual, 
+                        paste(percent, "%"), 
+                        sep = "\n")), 
+            position = position_stack(vjust = 0.6), 
+            color = "white") + 
+  labs(title = "Percentage of Casual and Member Rides Over the Last Year")+ 
+  theme_void()
+
+```
+\n
+1. It is found that Members (55%) have ridden more rides than casuals (45%)
+Let's break this data down further by bike type.
+
+```{r}
+#Breaking down the data further by bike type. For some reason, there are no 
+#Docked bikes used by members.
+#2. The most popular bike for members and casuals were classic bikes.
+
+data %>% 
+  group_by(member_casual, rideable_type)%>%
+  summarize(count = n()) %>%
+  mutate(percent = round(count*100/sum(count),0))  %>% 
+  ggplot(aes(x = "", y = count, fill = member_casual, rideable_type)) + 
+  geom_bar(width = 1, stat = "identity", color = "white", show.legend = TRUE) +
+  coord_polar("y", start = 0) + 
+  geom_text(aes(label = 
+                  paste(rideable_type, 
+                        paste(percent, "%"), 
+                        sep = "\n")), 
+            position = position_stack(vjust = 0.5), 
+            color = "white") + 
+  labs(title = "Percentage of Casual and Member Rides by Bike Type Over the Last Year")+ 
+  theme_void()
+
+```
+\n
+2. The most popular bike for members (78%) and casuals (62%) were classic bikes. Members did not use any docked bikes.
+
+Lets investigate the duration of bike rides.
+
+```{r}
+#Lets do the same plot but now for percentage of duration of bike rides.
+#3. Although classic bikes are the most popular, docked bikes had the 
+#greatest duration in the casual member groups. They were barely used in the 
+#members group.
+
+data %>%
+  group_by(member_casual, rideable_type) %>%
+  summarize(dur = mean(duration), count = n()) %>%
+  ggplot(aes(x = rideable_type, y = dur, 
+             color = member_casual, 
+             fill = member_casual))+ 
+  geom_bar(stat = "identity") + 
+  facet_wrap(~member_casual) + 
+  labs (title = "Average Ride Duration Per Bike Type Per Member/Casual", 
+        x = "Type of Bike", y = "Average Duration of Ride (min)") + 
+  theme_minimal() + 
+  theme(axis.text.x = 
+          element_text(size = 10))
+
+```
+\n
+3. We have found another insight. Although classic bikes are the most popular, docked bikes had the 
+greatest duration in the casual member groups. They were barely used in the 
+members group.
+
+```{r}
+
+#Lets explore the number of rides per member/casual per month.
+#4. Members rode more times than casuals using classic bikes. Members did
+#not use docked bikes. In the summer (Jun to Aug), casual rides were greater than
+#member rides. This was mostly driven by classic bikes in the casuals group,
+# and partly by docked bikes in the casuals group that was absent in the members
+# group.
+
+data %>%
+  group_by(month, member_casual) %>%
+  summarize(count = n()) %>%
+  ggplot +
+  aes(x=month, y=count, color = member_casual, group = member_casual) +
+  geom_point() + geom_line(size = 1) +
+  scale_y_continuous(limits = c(0, NA),
+                     expand = expansion(mult = c(0, 0.1))) +
+  labs (title = "Number of Rides by Month by Casual/Member", 
+        x = "Month", y = "Number of Rides") 
+
+```
+\n
+4. Members rode more times than casuals using classic bikes. Members did
+not use docked bikes. In the summer (Jun to Aug), casual rides were greater than
+member rides. Let us break this down further into rideable bike type for more info.
+
+```{r}
+  data %>%
+  group_by(month, member_casual,rideable_type) %>%
+  summarize(count = n()) %>%
+  ggplot +
+  aes(x=month, y=count, color = member_casual, group = member_casual) +
+  geom_point() + geom_line(size = 1) +
+  scale_y_continuous(limits = c(0, NA),
+                     expand = expansion(mult = c(0, 0.1))) +
+  labs (title = "Number of Rides by Month by Casual/Member by Bike Type", 
+        x = "Month", y = "Number of Rides") + 
+  facet_wrap(~rideable_type)
+
+```
+\n
+5. In the analysis of #4, this was mostly driven by classic bikes in the casuals group,
+and partly by docked bikes in the casuals group. Docked bikes were absent in the members
+group.
+
+Let us look at the number of rides per member/casual per weekday.
+``` {r}
+#Lets explore the number of rides per member/casual per weekday.
+#6. Members rode the most times in the middle of the week, being fairly consistent
+# throughout the whole week. Casuals rode the most on weekends.
+
+data %>%
+  group_by(wday, member_casual) %>%
+  summarize(count = n()) %>%
+  ggplot +
+  aes(x=wday, y=count, color = member_casual, group = member_casual) +
+  geom_point() + geom_line(size = 1) +
+  scale_y_continuous(limits = c(0, NA),
+                     expand = expansion(mult = c(0, 0.1))) +
+  labs (title = "Number of Rides by Weekday by Casual/Member", 
+        x = "Weekday", y = "Number of Rides") 
+```
+\n
+Let us break this data down by bike type.
+
+```{r}
+  data %>%
+  group_by(wday, member_casual,rideable_type) %>%
+  summarize(count = n()) %>%
+  ggplot +
+  aes(x=wday, y=count, color = member_casual, group = member_casual) +
+  geom_point() + geom_line(size = 1) +
+  scale_y_continuous(limits = c(0, NA),
+                     expand = expansion(mult = c(0, 0.1))) +
+  labs (title = "Number of Rides by Weekday by Casual/Member by Bike Type", 
+        x = "Weekday", y = "Number of Rides") + 
+  facet_wrap(~rideable_type)
+```
+\n
+6. Members rode the most times in the middle of the week, being fairly consistent
+throughout the whole week. Casuals rode the most on weekends.
+ 
+Let us look at the number of rides per member/casual per starting time hour of the day.
+
+```{r}
+
+#Lets explore the number of rides per member/casual per hour of the day.
+#7. Casuals and members took the most rides 3-8pm.
+
+data %>%
+  group_by(hour, member_casual) %>%
+  summarize(count = n()) %>%
+  ggplot +
+  aes(x=hour, y=count, color = member_casual, group = member_casual) +
+  geom_point() + geom_line(size = 1) +
+  scale_y_continuous(limits = c(0, NA),
+                     expand = expansion(mult = c(0, 0.1))) +
+  labs (title = "Starting time of Rides by Hour of the Day by Casual/Member", 
+        x = "Hour of the day", y = "Number of Rides") 
+```
+
+\n
+Let us break this data down by bike type.
+```{r}
+  data %>%
+  group_by(hour, member_casual,rideable_type) %>%
+  summarize(count = n()) %>%
+  ggplot +
+  aes(x=hour, y=count, color = member_casual, group = member_casual) +
+  geom_point() + geom_line(size = 1) +
+  scale_y_continuous(limits = c(0, NA),
+                     expand = expansion(mult = c(0, 0.1))) +
+  labs (title = "Starting time of Rides by Month by Casual/Member by Bike Type", 
+        x = "Hour of the day", y = "Number of Rides") + 
+  facet_wrap(~rideable_type)
+```
+\n
+7. Casuals and members took the most rides 3-8pm.
+
+
+Lets look at the duration of the rides per member/casual per month.
+```{r}
+
+# Same thing, but with duration
+
+#Lets explore the duration of rides per member/casual per month.
+#8. Casual rides on average were about 2x longer (~30min) than members throughout the year (~15min).
+# The longest rides for casuals were driven by docked bikes and these long bike rides
+# were undertaken with the longest duration during February and July.
+
+data %>%
+  group_by(month, member_casual) %>%
+  summarize(count = mean(duration)) %>%
+  ggplot +
+  aes(x=month, y=count, color = member_casual, group = member_casual) +
+  geom_point() + geom_line(size = 1) +
+  scale_y_continuous(limits = c(0, NA),
+                     expand = expansion(mult = c(0, 0.1))) +
+  labs (title = "Duration of Rides by Month by Casual/Member", 
+        x = "Month", y = "Duration of Rides  (min)") 
+```
+\n
+Let's break this data down by bike type.
+```{r}
+  data %>%
+  group_by(month, member_casual,rideable_type) %>%
+  summarize(count = mean(duration)) %>%
+  ggplot +
+  aes(x=month, y=count, color = member_casual, group = member_casual) +
+  geom_point() + geom_line(size = 1) +
+  scale_y_continuous(limits = c(0, NA),
+                     expand = expansion(mult = c(0, 0.1))) +
+  labs (title = "Duration of Rides by Month by Casual/Member", 
+        x = "Month", y = "Duration of Rides  (min)") + 
+  facet_wrap(~rideable_type)
+```
+\n
+8. Casual rides on average were about 2x longer (~30min) than members throughout the year (~15min).
+The longest rides for casuals were driven by docked bikes and these long bike rides
+were undertaken with the longest duration during February and July. The average duration for 
+docked bike casual rides was ~80min, with a spike in duration to ~155min in February.
+
+Lets explore the duration of rides per member/casual per weekday.
+```{r}
+#Lets explore the duration of rides per member/casual per weekday.
+#9. Members were consistent in their duration across the week, casuals had the 
+#greatest duration on weekends. Duration of Casual Rides increased to ~35min on weekends from ~30 min.
+
+data %>%
+  group_by(wday, member_casual) %>%
+  summarize(count = mean(duration)) %>%
+  ggplot +
+  aes(x=wday, y=count, color = member_casual, group = member_casual) +
+  geom_point() + geom_line(size = 1) +
+  scale_y_continuous(limits = c(0, NA),
+                     expand = expansion(mult = c(0, 0.1))) +
+  labs (title = "Duration of Rides by Weekday by Casual/Member", 
+        x = "Weekday", y = "Duration of Rides (min)") 
+```
+\n
+Let's break this data down by rideable type.
+```{r}
+  data %>%
+  group_by(wday, member_casual,rideable_type) %>%
+  summarize(count = mean(duration)) %>%
+  ggplot +
+  aes(x=wday, y=count, color = member_casual, group = member_casual) +
+  geom_point() + geom_line(size = 1) +
+  scale_y_continuous(limits = c(0, NA),
+                     expand = expansion(mult = c(0, 0.1))) +
+  labs (title = "Number of Rides by Weekday by Casual/Member by Bike Type", 
+        x = "Weekday", y = "Duration of Rides (min)") + 
+  facet_wrap(~rideable_type)
+```
+\n
+9. Members were consistent in their duration across the week, casuals had the 
+greatest duration on weekends. Duration of Casual Rides increased to ~35min on weekends from ~30 min.
+Docked bike casual riders had an average of ~80min duration ride.
+
+Lets explore the duration of rides per member/casual per hour of the day.
+
+```{r}
+
+#Lets explore the duration of rides per member/casual per hour of the day.
+#10. Casuals took the longest rides starting at 2-4am, being mostly driven by
+# docked bike usage. Members were consistent with bike ride duration throughout
+# all hours.
+
+data %>%
+  group_by(hour, member_casual) %>%
+  summarize(count = mean(duration)) %>%
+  ggplot +
+  aes(x=hour, y=count, color = member_casual, group = member_casual) +
+  geom_point() + geom_line(size = 1) +
+  scale_y_continuous(limits = c(0, NA),
+                     expand = expansion(mult = c(0, 0.1))) +
+  labs (title = "Starting time of Duration of Rides by Hour of the Day by Casual/Member", 
+        x = "Hour of the day", y = "Duration of Rides (min)") 
+```
+\n
+Let's break this down by bike type.
+``` {r}
+  data %>%
+  group_by(hour, member_casual,rideable_type) %>%
+  summarize(count = mean(duration)) %>%
+  ggplot +
+  aes(x=hour, y=count, color = member_casual, group = member_casual) +
+  geom_point() + geom_line(size = 1) +
+  scale_y_continuous(limits = c(0, NA),
+                     expand = expansion(mult = c(0, 0.1))) +
+  labs (title = "Starting time of Duration of Rides by Month by Casual/Member by Bike Type", 
+        x = "Hour of the day", y = "Duration of Rides (min)") + 
+  facet_wrap(~rideable_type)
+```
+\n
+10. Casuals took the longest rides starting at 2-4am, being mostly driven by
+ docked bike usage. Members were consistent with bike ride duration throughout
+ all hours.
+ 
+ Let us now investigate the top 10 routes used my members, casuals and casuals that use docked bikes.
+
+```{r}
+##Get the top 10 routes for members and casuals
+casual_routes <- data %>%
+  filter(member_casual == "casual") %>% 
+  group_by(route) %>%
+  tally(sort = TRUE)
+
+casual_routes = casual_routes[1:10,]
+
+casual_droutes <- data %>%
+  filter(member_casual == "casual") %>% 
+  filter(rideable_type == "docked_bike") %>% 
+  group_by(route) %>%
+  tally(sort = TRUE)
+
+casual_droutes = casual_droutes[1:10,]
+
+member_routes <- data %>%
+  filter(member_casual == "member") %>% 
+  group_by(route) %>%
+  tally(sort = TRUE)
+
+member_routes = member_routes[1:10,]
+
+casual_routes %>% 
+  ggplot(aes(x = reorder(route, n),
+             y = n)) + 
+  geom_bar(stat = "identity", 
+           fill = "blue") + 
+  xlab("Most Frequently Used Top 10 Routes") + 
+  ylab("Number of Rides") +
+  coord_flip() + 
+  labs(title = "Top 10 Routes for Casual Riders") +
+  theme_minimal()
+
+```
+\n
+
+11. The most popular route for casual riders was Streeter Dr & Grand Ave to Streeter Dr & Grand Ave. This seems to be a ride out to somewhere and then back to the same location.
+
+```{r}
+
+casual_droutes %>% 
+  ggplot(aes(x = reorder(route, n),
+             y = n)) + 
+  geom_bar(stat = "identity", 
+           fill = "blue") + 
+  xlab("Most Frequently Used Top 10 Routes") + 
+  ylab("Number of Rides") +
+  coord_flip() + 
+  labs(title = "Top 10 Routes for Casual Docked Bike Riders") +
+  theme_minimal()
+```
+\n
+12. The most popular popular route for docked bike casual riders was the same as casual riders as a whole - Streeter Dr & Grand Ave to Streeter Dr & Grand Ave.
+```{r}
+member_routes %>% 
+  ggplot(aes(x = reorder(route, n),
+             y = n)) + 
+  geom_bar(stat = "identity", 
+           fill = "blue") + 
+  xlab("Most Frequently Used Top 10 Routes") + 
+  ylab("Number of Rides") +
+  coord_flip() + 
+  labs(title = "Top 10 Routes for Member Riders") +
+  theme_minimal()
+
+```
+\n
+13. The most popular popular route for member riders was Ellis Ave & 60th St to Ellis Ave & 55th St, followed by Ellis and 55th St to Ellis and 60th St.
+
+## Summary of Analysis
+
+1. It is found that Members (55%) have ridden more rides than casuals (45%)
+\n
+2. The most popular bike for members (78%) and casuals (62%) were classic bikes. Members did not use any docked bikes.
+\n
+3. Although classic bikes are the most popular, docked bikes had the 
+greatest duration in the casual member groups. They were barely used in the 
+members group.
+\n
+4. Members rode more times than casuals using classic bikes. Members did
+not use docked bikes. In the summer (Jun to Aug), casual rides were greater than
+member rides.
+\n
+5. In the analysis of #4, this was mostly driven by classic bikes in the casuals group,
+and partly by docked bikes in the casuals group. Docked bikes were absent in the members
+group.
+\n
+6. Members rode the most times in the middle of the week, being fairly consistent
+throughout the whole week. Casuals rode the most on weekends.
+\n
+7. Casuals and members took the most rides 3-8pm.
+\n
+8. Casual rides on average were about 2x longer (~30min) than members throughout the year (~15min).
+The longest rides for casuals were driven by docked bikes and these long bike rides
+were undertaken with the longest duration during February and July. The average duration for 
+docked bike casual rides was ~80min, with a spike in duration to ~155min in February.
+\n
+9. Members were consistent in their duration across the week, casuals had the 
+greatest duration on weekends. Duration of Casual Rides increased to ~35min on weekends from ~30 min.
+Docked bike casual riders had an average of ~80min duration ride.
+\n
+10. Casuals took the longest rides starting at 2-4am, being mostly driven by
+ docked bike usage. Members were consistent with bike ride duration throughout
+ all hours.
+\n
+11. The most popular route for casual riders was Streeter Dr & Grand Ave to Streeter Dr & Grand Ave. This seems to be a ride out to somewhere and then back to the same location.
+\n
+12. The most popular popular route for docked bike casual riders was the same as casual riders as a whole - Streeter Dr & Grand Ave to Streeter Dr & Grand Ave.
+\n
+13. The most popular popular route for member riders was Ellis Ave & 60th St to Ellis Ave & 55th St, followed by Ellis and 55th St to Ellis and 60th St.
+
+## Phase 6 - Act
+
+Through the above analysis, I have come to the following recommendations:
+
+1. Target digital media to riders during summer, especially during weekends between 3pm-8pm about the benefit of a annual membership that will have a discounted price depending on how much you cycle in one ride. As casual members take longer rides than members, this is an incentive.
+
+2. Make docked bikes available to members or investigate why docked bikes are not being used by members. A significant portion of casuals use docked bikes, but not members. If we can convert some of these users into annual members, this will bring revenue.
+
+3. Use digital media marketing to target docked bike riders especially in February and July in the morning between 2-4am around the location of Streeter Dr & Grand Ave about the price discount or advantage of such if taking a very long duration ride.
+
+This was my first project, all feedback is appreciated. Thank you Google for the Google Data Analytics Certificate.
+
+
+
+
+
