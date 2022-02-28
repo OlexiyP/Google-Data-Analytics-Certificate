@@ -1,2 +1,2 @@
 # Google-Data-Analytics-Certificate
-Google Data Certificate using R instead of google sheets.
+This was my first project, using the capstone project for the Google Data Certificate. This was for the project under Cyclistic.
